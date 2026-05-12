@@ -1,0 +1,35 @@
+\documentclass[12pt, a4paper]{article}
+\usepackage[french]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+
+\usepackage{hyperref}
+\usepackage{csquotes}
+\usepackage[style=verbose, backend=biber]{biblatex}
+\addbibresource{biblio.bib}
+
+\geometry{margin=1in}
+
+\begin{document}
+
+\pagestyle{empty}
+
+\begin{center}
+    \large \textbf{Résumé : Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture} \\
+    \vspace{0.5cm}
+    Cédric GAUTHERET, Romain AMIGON et Noé BARRANGER
+\end{center}
+
+I-JEPA \footcite{ijepa23} est une nouvelle architecture d'apprentissage auto-supervisé conçue pour apprendre des représentations d'images hautement sémantiques. Contrairement aux approches classiques, ce modèle ne dépend pas d'augmentations de données complexes (SimCLR, DINO, etc.) i.e. méthodes contrastives ni de méthodes génératives (GAN ou MAE) basées sur la reconstruction de pixels. Les auteurs visent à démontrer qu'en prédisant les parties manquantes d'une image directement dans un espace de représentation latent, le système peut capturer l'essence sémantique d'une scène tout en éliminant les détails de bas niveau inutiles, améliorant ainsi la généralisation du modèle et accélérant sont entraînement.
+
+Le I-JEPA repose sur trois composants clés : un \textbf{context-encoder}, un \textbf{target-encoder} et un \textbf{predictor} chacun étant basé sur un modèle de ViT (le predicteur étant plus léger). Le coeur de l'innovation est le \textbf{masquage multi-blocs}, où le modèle doit prédire les représentations de plusieurs gros blocs cibles continus à partir d'un unique bloc de contexte informatif au lieu de petits blocs disjoints comme c'est le cas pour le MAE. Pour éviter le phénomène d'effondrement des représentations, les poids de l'encodeur cible sont mis à jour via \textbf{EMA} basée sur les poids de l'encodeur de contexte, sans calcul de gradient direct. La perte est calculée comme la distance $L^2$ moyenne entre les représentations prédites et les représentations cibles dans l'espace latent. Pour mettre à jour les poids du context-encoder et predictor, on utilise une descente de gradient reposant sur AdamW avec un \textit{CosineAnnealing scheduler} qui permettent de moduler intelligemment le taux d'apprentissage. 
+
+Pour le pré-entraînement non supervisé, les auteurs utilisent l'ensemble de données ImageNet-1K. La robustesse et la polyvalence des représentations apprises sont ensuite évaluées sur une grande variété de tâches. Cela inclut des tests de classification sur des jeux de données tels que CIFAR100 ou Places205.
+
+Les résultats expérimentaux montrent que I-JEPA est non seulement plus performant que les méthodes de reconstruction de pixels (comme MAE) pour la classification d'images, mais aussi beaucoup plus efficace en termes de ressources. Par exemple, l'entraînement d'un modèle ViT-Huge/14 nécessite moins de 1200 heures GPU, soit une efficacité décuplée par rapport à MAE. En outre, I-JEPA surpasse nettement les méthodes basées sur l'invariance sur les tâches de bas niveau nécessitant une précision géométrique, comme le comptage d'objets et la prédiction de profondeur. Les visualisations montrent que le prédicteur capture correctement les structures globales et les poses des objets.
+
+L'une des forces majeures de I-JEPA réside dans sa capacité à apprendre des caractéristiques sémantiques riches de manière efficace sans introduire les biais induits par les augmentations de données (flou et bruit). Sa polyvalence lui permet de briller tant sur des tâches sémantiques que sur des tâches locales. Cependant, le modèle présente certaines limites, notamment la sensibilité de la performance liée à l'architecture légère du prédicteur. De plus, bien que le pré-entraînement soit globalement plus rapide, chaque itération d'entraînement comporte un léger surcoût lié au calcul des cibles dans l'espace latent comparativement aux méthodes prédisant directement les pixels.
+
+
+\end{document}
