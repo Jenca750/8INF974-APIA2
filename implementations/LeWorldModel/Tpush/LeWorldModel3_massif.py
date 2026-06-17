@@ -1,24 +1,4 @@
-"""
-LeWorldModel — Push-T
-Version la plus proche de l'article (Maes et al., 2026)
 
-Écarts assumés par rapport au papier (contraintes matérielles) :
-  - ViT-Tiny patch 16 au lieu de patch 14 (timm n'a pas tiny/14 standard)
-  - Prédicteur 6 couches / 16 têtes au lieu de ViT-S officiel
-  - batch_size=64 au lieu de 128 (mémoire)
-  - M=256 projections SIGReg au lieu de 1024 (papier montre que c'est insensible, Fig.15)
-
-Ce qui est fidèle au papier :
-  - 10 epochs (Appendix E : "10 epochs suffisent sur Push-T")
-  - frame_skip=5, action_dim=10, seq_len=4 (Appendix D)
-  - lambda=0.1 (Section 3.1)
-  - SIGReg step-wise en fp32
-  - AdaLN-Zero (init à zéro)
-  - Embeddings positionnels appris dans le prédicteur
-  - Décodeur entraîné a posteriori, jamais pendant le WM (Appendix D)
-  - Historique N=3 frames en contexte de planning (Appendix D)
-  - Pas d'early stopping sur le WM (le papier fait 10 epochs fixes)
-"""
 
 import torch
 import torch.nn as nn
@@ -31,10 +11,6 @@ import timm
 import numpy as np
 import matplotlib.pyplot as plt
 
-
-# =============================================================================
-# ARCHITECTURE
-# =============================================================================
 
 class Projector(nn.Module):
     def __init__(self, in_dim, out_dim):
@@ -120,9 +96,7 @@ class LeWMPredictor(nn.Module):
         return out.view(B, T, D)
 
 
-# =============================================================================
-# SIGREG — toujours en fp32, step-wise (Algorithme 1 du papier)
-# =============================================================================
+
 
 def epps_pulley_stat(h, t_nodes):
     """h : (T, B, M) ; t_nodes : (K,)."""
@@ -290,112 +264,112 @@ def plot_predictions(model, decoder, test_loader, device, horizon=5, n_context=3
 
 
 
-if __name__ == "__main__":
-    TRAIN_WM = False
-    TRAIN_DECODER = True
 
-    ds = load_dataset("lerobot/pusht_image")
+TRAIN_WM = False
+TRAIN_DECODER = True
 
-    train_dataset = PushTImageDataset(ds["train"])
-    train_loader = DataLoader(
-        train_dataset, batch_size=64, shuffle=True,
-        drop_last=True, num_workers=4, pin_memory=True
-    )
+ds = load_dataset("lerobot/pusht_image")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device : {device}")
-    print(f"Fenêtres train : {len(train_dataset)}")
+train_dataset = PushTImageDataset(ds["train"])
+train_loader = DataLoader(
+    train_dataset, batch_size=64, shuffle=True,
+    drop_last=True, num_workers=4, pin_memory=True
+)
 
-    action_dim = 10
-    model = LeWorldModel(embed_dim=192, action_dim=action_dim).to(device)
-    decoder = LeWMDecoder(embed_dim=192, img_size=224).to(device)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Device : {device}")
+print(f"Fenêtres train : {len(train_dataset)}")
 
-
-    if TRAIN_WM:
-        optimizer_wm = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
-        warmup_steps = 1000
-        scheduler_wm = optim.lr_scheduler.LambdaLR(
-            optimizer_wm, lambda step: min(1.0, (step + 1) / warmup_steps))
-
-        epochs_wm = 10
-        lambd = 0.1
-
-        print("\nPhase 1")
-        for epoch in range(epochs_wm):
-            model.train()
-            total_wm = total_pred = total_reg = 0.0
-
-            for obs, actions in train_loader:
-                obs = obs.to(device, non_blocking=True)
-                actions = actions.to(device, non_blocking=True)
-
-                optimizer_wm.zero_grad()
-                loss_wm, pred_loss, reg_loss, _ = model.loss(obs, actions, lambd)
-                loss_wm.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer_wm.step()
-                scheduler_wm.step()
-
-                total_wm += loss_wm.item()
-                total_pred += pred_loss.item()
-                total_reg += reg_loss.item()
-
-            n = len(train_loader)
-            print(f"WM Epoch {epoch+1}/{epochs_wm} | "
-                  f"Loss: {total_wm/n:.4f} | "
-                  f"Pred: {total_pred/n:.4f} | "
-                  f"SIGReg: {total_reg/n:.4f}")
-
-            torch.save(model.state_dict(), 'lewm_model_weights.pth')
-            print("Poids WM sauvegardés.")
-
-    model.load_state_dict(torch.load('lewm_model_weights (8).pth',
-                                     map_location=device, weights_only=True))
+action_dim = 10
+model = LeWorldModel(embed_dim=192, action_dim=action_dim).to(device)
+decoder = LeWMDecoder(embed_dim=192, img_size=224).to(device)
 
 
-    if TRAIN_DECODER:
-        model.eval()
-        optimizer_dec = optim.AdamW(decoder.parameters(), lr=1e-4, weight_decay=1e-4)
-        epochs_dec = 20
-        best_dec_loss = float('inf')
+if TRAIN_WM:
+    optimizer_wm = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
+    warmup_steps = 1000
+    scheduler_wm = optim.lr_scheduler.LambdaLR(
+        optimizer_wm, lambda step: min(1.0, (step + 1) / warmup_steps))
 
-        print("\nPhase 2")
-        for epoch in range(epochs_dec):
-            decoder.train()
-            total_dec = 0.0
+    epochs_wm = 10
+    lambd = 0.1
 
-            for obs, _ in train_loader:
-                obs = obs.to(device, non_blocking=True)
+    print("\nPhase 1")
+    for epoch in range(epochs_wm):
+        model.train()
+        total_wm = total_pred = total_reg = 0.0
 
-                with torch.no_grad():
-                    z = model.encoder(obs)
+        for obs, actions in train_loader:
+            obs = obs.to(device, non_blocking=True)
+            actions = actions.to(device, non_blocking=True)
 
-                B, T, D = z.shape
-                z_flat = z.reshape(B * T, D)
-                obs_flat = obs.reshape(B * T, 3, 224, 224)
+            optimizer_wm.zero_grad()
+            loss_wm, pred_loss, reg_loss, _ = model.loss(obs, actions, lambd)
+            loss_wm.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer_wm.step()
+            scheduler_wm.step()
 
-                optimizer_dec.zero_grad()
-                reconstructed = decoder(z_flat)
-                loss_dec = F.mse_loss(reconstructed, obs_flat)
-                loss_dec.backward()
-                torch.nn.utils.clip_grad_norm_(decoder.parameters(), 1.0)
-                optimizer_dec.step()
+            total_wm += loss_wm.item()
+            total_pred += pred_loss.item()
+            total_reg += reg_loss.item()
 
-                total_dec += loss_dec.item()
+        n = len(train_loader)
+        print(f"WM Epoch {epoch+1}/{epochs_wm} | "
+                f"Loss: {total_wm/n:.4f} | "
+                f"Pred: {total_pred/n:.4f} | "
+                f"SIGReg: {total_reg/n:.4f}")
 
-            avg_dec = total_dec / len(train_loader)
-            print(f"Decoder Epoch {epoch+1}/{epochs_dec} | Loss: {avg_dec:.4f}")
+        torch.save(model.state_dict(), 'lewm_model_weights.pth')
+        print("Poids WM sauvegardés.")
 
-            if avg_dec <= best_dec_loss:
-                best_dec_loss = avg_dec
-                torch.save(decoder.state_dict(), 'lewm_decoder_weights.pth')
+model.load_state_dict(torch.load('lewm_model_weights (8).pth',
+                                    map_location=device, weights_only=True))
 
-    decoder.load_state_dict(torch.load('lewm_decoder_weights.pth',
-                                       map_location=device, weights_only=True))
 
-    test_split = ds["test"] if "test" in ds else ds["train"]
-    test_dataset = PushTImageDataset(test_split)
-    test_loader = DataLoader(test_dataset, batch_size=64, shuffle=True, drop_last=True)
+if TRAIN_DECODER:
+    model.eval()
+    optimizer_dec = optim.AdamW(decoder.parameters(), lr=1e-4, weight_decay=1e-4)
+    epochs_dec = 20
+    best_dec_loss = float('inf')
 
-    print("\n Rollout  (contexte N=3, horizon=5)")
-    plot_predictions(model, decoder, test_loader, device, horizon=5, n_context=3)
+    print("\nPhase 2")
+    for epoch in range(epochs_dec):
+        decoder.train()
+        total_dec = 0.0
+
+        for obs, _ in train_loader:
+            obs = obs.to(device, non_blocking=True)
+
+            with torch.no_grad():
+                z = model.encoder(obs)
+
+            B, T, D = z.shape
+            z_flat = z.reshape(B * T, D)
+            obs_flat = obs.reshape(B * T, 3, 224, 224)
+
+            optimizer_dec.zero_grad()
+            reconstructed = decoder(z_flat)
+            loss_dec = F.mse_loss(reconstructed, obs_flat)
+            loss_dec.backward()
+            torch.nn.utils.clip_grad_norm_(decoder.parameters(), 1.0)
+            optimizer_dec.step()
+
+            total_dec += loss_dec.item()
+
+        avg_dec = total_dec / len(train_loader)
+        print(f"Decoder Epoch {epoch+1}/{epochs_dec} | Loss: {avg_dec:.4f}")
+
+        if avg_dec <= best_dec_loss:
+            best_dec_loss = avg_dec
+            torch.save(decoder.state_dict(), 'lewm_decoder_weights.pth')
+
+decoder.load_state_dict(torch.load('lewm_decoder_weights.pth',
+                                    map_location=device, weights_only=True))
+
+test_split = ds["test"] if "test" in ds else ds["train"]
+test_dataset = PushTImageDataset(test_split)
+test_loader = DataLoader(test_dataset, batch_size=64, shuffle=True, drop_last=True)
+
+print("\n Rollout  (contexte N=3, horizon=5)")
+plot_predictions(model, decoder, test_loader, device, horizon=5, n_context=3)
